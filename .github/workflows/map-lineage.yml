@@ -1,1 +1,56 @@
+name: Map LineageOS File System
 
+on:
+  workflow_dispatch:
+
+jobs:
+  map_lineage:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y python3-pip 7zip p7zip-full android-sdk-libsparse-utils e2fsprogs
+        pip3 install gdown
+
+    - name: Download LineageOS GSI
+      run: |
+        echo "Downloading LineageOS GSI..."
+        gdown 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
+
+    - name: Extract and Mount GSI
+      run: |
+        echo "Extracting GSI..."
+        7z x lineage_gsi.7z -o./gsi_extracted/
+        SYSTEM_IMG=$(find gsi_extracted/ -name "*.img" | head -1)
+        
+        # Convert to raw if sparse
+        if file "$SYSTEM_IMG" | grep -q "sparse"; then
+          simg2img "$SYSTEM_IMG" system_raw.img
+        else
+          cp "$SYSTEM_IMG" system_raw.img
+        fi
+        
+        # Mount the image
+        sudo mkdir -p /mnt/gsi_system
+        sudo mount -o loop,ro system_raw.img /mnt/gsi_system || true
+
+    - name: Generate File Maps
+      run: |
+        # Use sudo and || true to bypass any permission blocks
+        echo "Mapping all files..."
+        sudo find /mnt/gsi_system > lineageos_paths.txt || true
+        
+        echo "Filtering for relevant hardware files..."
+        cat lineageos_paths.txt | grep -iE 'fingerprint|biometric|egis|goodix|audio|mixer_paths|libsec|ril|overlay' > lineageos_relevant_paths.txt
+
+    - name: Upload Maps
+      uses: actions/upload-artifact@v4
+      with:
+        name: LineageOS-Hardware-Paths
+        path: |
+          lineageos_paths.txt
+          lineageos_relevant_paths.txt
+        retention-days: 7
+        
