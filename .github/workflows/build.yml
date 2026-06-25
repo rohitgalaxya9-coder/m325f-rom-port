@@ -1,10 +1,10 @@
-name: Port LineageOS GSI for SM-M325F
+name: Final LineageOS M325F Port
 
 on:
   workflow_dispatch:
 
 jobs:
-  port:
+  build_port:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
 
@@ -12,323 +12,142 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y \
-          python3 python3-pip \
-          7zip p7zip-full \
-          android-sdk-libsparse-utils \
-          e2fsprogs \
-          cpio \
-          tar \
-          wget \
-          curl
+        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip
         pip3 install gdown
+        
+        # Install lpunpack
+        git clone https://github.com/whyshhnuv/lpunpack-lpmake-mirror.git lpbinary
+        sudo cp lpbinary/binary/lpunpack /usr/local/bin/
+        sudo chmod +x /usr/local/bin/lpunpack
+        rm -rf lpbinary
 
-    - name: Download LineageOS GSI
+    - name: Download Files
       run: |
         echo "Downloading LineageOS GSI..."
         gdown 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
-        echo "GSI downloaded successfully"
-        ls -lh lineage_gsi.7z
-
-    - name: Download Samsung Stock ROM AP
-      run: |
+        
         echo "Downloading Samsung AP..."
         gdown 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
-        echo "AP downloaded successfully"
-        ls -lh AP.tar.md5
 
     - name: Extract LineageOS GSI
       run: |
-        echo "Extracting GSI..."
         7z x lineage_gsi.7z -o./gsi_extracted/
-        ls -lh gsi_extracted/
-        # Find the system.img
         SYSTEM_IMG=$(find gsi_extracted/ -name "*.img" | head -1)
-        echo "Found image: $SYSTEM_IMG"
-        cp "$SYSTEM_IMG" system_original.img
-
-    - name: Extract Samsung AP
-      run: |
-        echo "Extracting Samsung AP tar..."
-        # Remove md5 suffix and extract tar
-        cp AP.tar.md5 AP.tar
-        tar -xf AP.tar
-        ls -lh
-        # Find and extract any lz4 compressed images
-        for f in *.lz4; do
-          [ -f "$f" ] && unlz4 "$f" "${f%.lz4}" && echo "Extracted $f"
-        done
-        ls -lh *.img 2>/dev/null || echo "Listing all files:"
-        ls -lh
-
-    - name: Convert sparse images to raw
-      run: |
-        # Convert GSI system.img if sparse
-        file system_original.img
-        if file system_original.img | grep -q "sparse"; then
-          echo "Converting sparse GSI to raw..."
-          simg2img system_original.img system_raw.img
+        
+        if file "$SYSTEM_IMG" | grep -q "sparse"; then
+          simg2img "$SYSTEM_IMG" system_raw.img
         else
-          echo "GSI already raw format"
-          cp system_original.img system_raw.img
+          cp "$SYSTEM_IMG" system_raw.img
         fi
-        # Convert vendor.img if sparse
-        if [ -f vendor.img ]; then
-          file vendor.img
-          if file vendor.img | grep -q "sparse"; then
-            echo "Converting sparse vendor to raw..."
-            simg2img vendor.img vendor_raw.img
-          else
-            cp vendor.img vendor_raw.img
-          fi
-        fi
-        ls -lh *_raw.img 2>/dev/null
-
-    - name: Mount images and extract blobs
-      run: |
-        # Create mount points
-        sudo mkdir -p /mnt/gsi_system
-        sudo mkdir -p /mnt/samsung_vendor
-
-        # Resize GSI to add space for blobs (add 500MB)
-        echo "Resizing GSI for blob injection..."
+        
+        # Add 300MB buffer for our injected overlays and configs
         e2fsck -f system_raw.img || true
-        resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 500 ))M || true
+        resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 300 ))M || true
 
-        # Mount GSI system
-        sudo mount -o loop,rw system_raw.img /mnt/gsi_system
-        echo "GSI mounted successfully"
-        ls /mnt/gsi_system/
-
-        # Mount Samsung vendor
-        if [ -f vendor_raw.img ]; then
-          sudo mount -o loop,ro vendor_raw.img /mnt/samsung_vendor
-          echo "Samsung vendor mounted successfully"
-          ls /mnt/samsung_vendor/
+    - name: Extract Samsung Super Image
+      run: |
+        cp AP.tar.md5 AP.tar
+        tar -xf AP.tar super.img.lz4 || true
+        [ ! -f super.img.lz4 ] && tar -xf AP.tar
+        
+        unlz4 super.img.lz4 super.img
+        
+        if file super.img | grep -q "sparse"; then
+          simg2img super.img super_raw.img
         else
-          echo "WARNING: vendor.img not found!"
+          cp super.img super_raw.img
         fi
+        
+        mkdir -p super_extracted
+        lpunpack super_raw.img super_extracted/
 
-    - name: Inject Samsung blobs into GSI
+    - name: Mount Images
       run: |
-        VENDOR=/mnt/samsung_vendor
-        SYSTEM=/mnt/gsi_system
+        sudo mkdir -p /mnt/gsi_system
+        sudo mount -o loop,rw system_raw.img /mnt/gsi_system
+        
+        sudo mkdir -p /mnt/samsung_vendor
+        sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
 
-        # Create target directories
-        sudo mkdir -p $SYSTEM/vendor/firmware
-        sudo mkdir -p $SYSTEM/vendor/lib
-        sudo mkdir -p $SYSTEM/vendor/lib64
-        sudo mkdir -p $SYSTEM/vendor/etc/wifi
-        sudo mkdir -p $SYSTEM/vendor/etc/audio
-        sudo mkdir -p $SYSTEM/vendor/lib/hw
-        sudo mkdir -p $SYSTEM/vendor/lib64/hw
-
-        echo "=== Injecting Wi-Fi firmware ==="
-        if [ -d "$VENDOR/firmware" ]; then
-          sudo cp -rf $VENDOR/firmware/* $SYSTEM/vendor/firmware/ 2>/dev/null && echo "Wi-Fi firmware injected" || echo "No firmware files"
-        fi
-        if [ -d "$VENDOR/etc/wifi" ]; then
-          sudo cp -rf $VENDOR/etc/wifi/* $SYSTEM/vendor/etc/wifi/ 2>/dev/null && echo "Wi-Fi configs injected" || echo "No wifi configs"
-        fi
-
-        echo "=== Injecting RIL blobs ==="
-        sudo find $VENDOR/lib -name "libsec-ril*" -exec sudo cp {} $SYSTEM/vendor/lib/ \; 2>/dev/null && echo "RIL lib injected" || echo "No RIL libs"
-        sudo find $VENDOR/lib64 -name "libsec-ril*" -exec sudo cp {} $SYSTEM/vendor/lib64/ \; 2>/dev/null && echo "RIL lib64 injected" || echo "No RIL lib64"
-
-        echo "=== Injecting Audio HAL ==="
-        sudo find $VENDOR/lib/hw -name "audio.*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null && echo "Audio HAL injected" || echo "No audio HAL"
-        sudo find $VENDOR/lib64/hw -name "audio.*" -exec sudo cp {} $SYSTEM/vendor/lib64/hw/ \; 2>/dev/null && echo "Audio HAL64 injected" || echo "No audio HAL64"
-        if [ -d "$VENDOR/etc/audio" ]; then
-          sudo cp -rf $VENDOR/etc/audio/* $SYSTEM/vendor/etc/audio/ 2>/dev/null && echo "Audio configs injected" || echo "No audio configs"
-        fi
-        # Audio policy config
-        sudo find $VENDOR/etc -name "audio_policy*" -exec sudo cp {} $SYSTEM/vendor/etc/ \; 2>/dev/null || true
-        sudo find $VENDOR/etc -name "mixer_paths*" -exec sudo cp {} $SYSTEM/vendor/etc/ \; 2>/dev/null || true
-
-        echo "=== Injecting Bluetooth firmware ==="
-        sudo find $VENDOR/firmware -name "*bt*" -exec sudo cp {} $SYSTEM/vendor/firmware/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib/hw -name "bluetooth*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-
-        echo "=== Injecting GPU blobs (Mali-G52) ==="
-        sudo mkdir -p $SYSTEM/vendor/lib/egl
-        sudo mkdir -p $SYSTEM/vendor/lib64/egl
-        sudo find $VENDOR/lib/egl -type f -exec sudo cp {} $SYSTEM/vendor/lib/egl/ \; 2>/dev/null && echo "GPU lib injected" || echo "No GPU libs"
-        sudo find $VENDOR/lib64/egl -type f -exec sudo cp {} $SYSTEM/vendor/lib64/egl/ \; 2>/dev/null && echo "GPU lib64 injected" || echo "No GPU lib64"
-
-        echo "=== Injecting Sensors HAL ==="
-        sudo find $VENDOR/lib/hw -name "sensors*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib64/hw -name "sensors*" -exec sudo cp {} $SYSTEM/vendor/lib64/hw/ \; 2>/dev/null || true
-
-        echo "=== Injecting Fingerprint HAL ==="
-        sudo find $VENDOR/lib/hw -name "*fingerprint*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib64/hw -name "*fingerprint*" -exec sudo cp {} $SYSTEM/vendor/lib64/hw/ \; 2>/dev/null || true
-
-        echo "=== Injecting DRM/Widevine ==="
-        sudo mkdir -p $SYSTEM/vendor/lib/mediadrm
-        sudo mkdir -p $SYSTEM/vendor/lib64/mediadrm
-        sudo find $VENDOR/lib/mediadrm -type f -exec sudo cp {} $SYSTEM/vendor/lib/mediadrm/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib64/mediadrm -type f -exec sudo cp {} $SYSTEM/vendor/lib64/mediadrm/ \; 2>/dev/null || true
-
-        echo "=== Injecting Media Codecs ==="
-        sudo find $VENDOR/lib/hw -name "*codec*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/etc -name "media_codecs*" -exec sudo cp {} $SYSTEM/vendor/etc/ \; 2>/dev/null || true
-        sudo find $VENDOR/etc -name "media_profiles*" -exec sudo cp {} $SYSTEM/vendor/etc/ \; 2>/dev/null || true
-
-        echo "=== Injecting Thermal HAL ==="
-        sudo find $VENDOR/lib/hw -name "thermal*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib64/hw -name "thermal*" -exec sudo cp {} $SYSTEM/vendor/lib64/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/etc -name "thermal*" -exec sudo cp {} $SYSTEM/vendor/etc/ \; 2>/dev/null || true
-
-        echo "=== Injecting Charging HAL ==="
-        sudo find $VENDOR/lib/hw -name "*health*" -exec sudo cp {} $SYSTEM/vendor/lib/hw/ \; 2>/dev/null || true
-        sudo find $VENDOR/lib64/hw -name "*health*" -exec sudo cp {} $SYSTEM/vendor/lib64/hw/ \; 2>/dev/null || true
-
-        echo "=== All blobs injected ==="
-
-    - name: Fix SELinux file contexts
+    - name: Surgically Inject Hardware Fixes
       run: |
-        SYSTEM=/mnt/gsi_system
-        VENDOR=/mnt/samsung_vendor
+        GSI=/mnt/gsi_system
+        VEN=/mnt/samsung_vendor
 
-        echo "Merging SELinux file contexts..."
-        # Get Samsung's file contexts
-        if [ -f "$VENDOR/etc/selinux/vendor_file_contexts" ]; then
-          sudo cat $VENDOR/etc/selinux/vendor_file_contexts >> /tmp/extra_contexts
-          echo "Samsung vendor file contexts extracted"
+        echo "--- Injecting Audio Policies ---"
+        if [ -f "$VEN/etc/audio_policy_configuration.xml" ]; then
+          sudo cp $VEN/etc/audio_policy_configuration.xml $GSI/system/etc/
+          sudo cp $VEN/etc/audio_effects.xml $GSI/system/etc/
+          sudo cp $VEN/etc/sec_audio_volume_curve.xml $GSI/system/etc/ 2>/dev/null || true
+          echo "Audio configurations injected."
         fi
 
-        # Apply to system
-        if [ -f "$SYSTEM/system/etc/selinux/plat_file_contexts" ]; then
-          sudo cat /tmp/extra_contexts >> $SYSTEM/system/etc/selinux/plat_file_contexts 2>/dev/null || true
-          echo "SELinux contexts merged"
+        echo "--- Injecting Fingerprint & UI Overlays ---"
+        sudo mkdir -p $GSI/system/product/overlay
+        
+        if [ -d "$VEN/overlay/FrameworkResOverlay" ]; then
+          sudo cp $VEN/overlay/FrameworkResOverlay/FrameworkResOverlay.apk $GSI/system/product/overlay/SamsungFrameworkResOverlay.apk
         fi
+        if [ -d "$VEN/overlay/SystemUIResOverlay" ]; then
+          sudo cp $VEN/overlay/SystemUIResOverlay/SystemUIResOverlay.apk $GSI/system/product/overlay/SamsungSystemUIResOverlay.apk
+        fi
+        
+        sudo chmod 644 $GSI/system/product/overlay/Samsung*.apk 2>/dev/null || true
+        echo "Overlays injected."
 
-        # Fix permissions on injected blobs
-        sudo find $SYSTEM/vendor/lib -type f -name "*.so" -exec sudo chmod 644 {} \; 2>/dev/null || true
-        sudo find $SYSTEM/vendor/lib64 -type f -name "*.so" -exec sudo chmod 644 {} \; 2>/dev/null || true
-        sudo find $SYSTEM/vendor/firmware -type f -exec sudo chmod 644 {} \; 2>/dev/null || true
-        echo "Permissions fixed"
-
-    - name: Add Samsung device props
+    - name: Apply Device Properties
       run: |
-        SYSTEM=/mnt/gsi_system
-        # Find build.prop
-        BUILD_PROP=$(find $SYSTEM -name "build.prop" | head -1)
-        echo "Found build.prop at: $BUILD_PROP"
-
+        BUILD_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
         if [ -f "$BUILD_PROP" ]; then
           sudo tee -a $BUILD_PROP << 'EOF'
-        # Samsung M325F device props
-        ro.product.vendor.manufacturer=samsung
-        ro.product.vendor.brand=samsung
-        ro.product.vendor.name=m325fxxx
-        ro.product.vendor.device=m325f
-        ro.product.vendor.model=SM-M325F
-        ro.vendor.build.security_patch=2024-01-01
-        # Performance
-        ro.config.perf_def=schedutil
-        ro.vendor.perf.scroll_opt=true
-        # Zram
-        ro.zram.mark_idle_delay_mins=60
-        ro.zram.first_wb_delay_mins=1440
-        # RIL
-        rild.libpath=/vendor/lib/libsec-ril.so
-        rild.libargs=-d /dev/ttyS0
-        ro.telephony.default_network=9
+        
+        # Hardware Overrides
+        persist.sys.phh.samsung_fingerprint=true
+        ro.hardware.fp.vendor=samsung
+        ro.hardware.fp.sideCap=true
+        ro.vendor.fingerprint.sensor_location=side
+        
+        # Audio
+        ro.multimedia.audio.supported=true
+        ro.vendor.audio.sdk.fluencetype=none
         EOF
-          echo "Device props added"
+          echo "Properties appended."
         fi
 
-    - name: Unmount images
+    - name: Unmount and Repack
       run: |
         sudo umount /mnt/gsi_system || true
         sudo umount /mnt/samsung_vendor || true
-        echo "Images unmounted"
+        
+        echo "Converting back to sparse image..."
+        e2fsck -f system_raw.img || true
+        img2simg system_raw.img system_final.img
 
-    - name: Patch vbmeta
+    - name: Create Disabled Vbmeta
       run: |
-        if [ -f vbmeta.img ]; then
-          echo "Patching vbmeta to disable verification..."
-          # Disable AVB verification flags
-          python3 << 'PYEOF'
+        dd if=/dev/zero bs=65536 count=1 of=vbmeta.img
+        python3 << 'PYEOF'
         with open("vbmeta.img", "r+b") as f:
             data = bytearray(f.read())
-            # Set flags to disable verification (byte 123 = flags)
-            if len(data) > 123:
-                data[123] = 3  # FLAG_HASHTREE_DISABLED | FLAG_VERIFICATION_DISABLED
-                f.seek(0)
-                f.write(data)
-                print("vbmeta patched successfully")
-            else:
-                print("vbmeta too small, skipping patch")
+            data[123] = 3
+            f.seek(0)
+            f.write(data)
         PYEOF
-        else
-          echo "No vbmeta.img found, creating disabled vbmeta..."
-          # Create a minimal disabled vbmeta
-          dd if=/dev/zero bs=65536 count=1 of=vbmeta.img
-        fi
 
-    - name: Repack system image
+    - name: Package Fastboot Images
       run: |
-        echo "Repacking system image..."
-        e2fsck -f system_raw.img || true
-        # Convert back to sparse
-        img2simg system_raw.img system_ported.img
-        ls -lh system_ported.img
-        echo "System image repacked"
+        mkdir -p fastboot_package
+        cp system_final.img fastboot_package/system.img
+        cp vbmeta.img fastboot_package/vbmeta.img
 
-    - name: Create flashable zip
-      run: |
-        mkdir -p flashable/META-INF/com/google/android
-
-        # Copy images
-        cp system_ported.img flashable/system.img
-        cp vbmeta.img flashable/vbmeta.img
-
-        # Create updater-script
-        cat > flashable/META-INF/com/google/android/updater-script << 'EOF'
-        ui_print("======================================");
-        ui_print(" LineageOS 23.2 Ported for SM-M325F ");
-        ui_print("======================================");
-        ui_print(" ");
-        ui_print("Flashing system partition...");
-        package_extract_file("system.img", "/dev/block/by-name/system");
-        ui_print("Flashing vbmeta...");
-        package_extract_file("vbmeta.img", "/dev/block/by-name/vbmeta");
-        ui_print(" ");
-        ui_print("Done! Please wipe data/cache before booting.");
-        ui_print("======================================");
-        EOF
-
-        # Create update-binary (shell script runner for TWRP)
-        cat > flashable/META-INF/com/google/android/update-binary << 'BINEOF'
-        #!/sbin/sh
-        SKIPUNZIP=1
-        ui_print() { echo "ui_print $1" >> /proc/self/fd/$OUTFD; echo "ui_print" >> /proc/self/fd/$OUTFD; }
-        OUTFD=$2
-        ZIPFILE=$3
-        ui_print "Extracting files..."
-        unzip -o "$ZIPFILE" "system.img" -d /tmp/port/
-        unzip -o "$ZIPFILE" "vbmeta.img" -d /tmp/port/
-        ui_print "Flashing system.img..."
-        dd if=/tmp/port/system.img of=/dev/block/by-name/system bs=4096
-        ui_print "Flashing vbmeta.img..."
-        dd if=/tmp/port/vbmeta.img of=/dev/block/by-name/vbmeta bs=4096
-        ui_print "Done! Wipe data before booting!"
-        BINEOF
-
-        chmod +x flashable/META-INF/com/google/android/update-binary
-
-        # Package into zip
-        cd flashable
-        zip -r9 ../LineageOS-23.2-M325F-Ported.zip .
+        cd fastboot_package
+        zip -r9 ../M325F-Lineage-Fastboot.zip .
         cd ..
-        ls -lh LineageOS-23.2-M325F-Ported.zip
-        echo "Flashable zip created!"
 
-    - name: Upload result
+    - name: Upload ROM
       uses: actions/upload-artifact@v4
       with:
-        name: LineageOS-23.2-M325F-Ported
-        path: LineageOS-23.2-M325F-Ported.zip
+        name: M325F-Lineage-Fastboot
+        path: M325F-Lineage-Fastboot.zip
         retention-days: 7
+        
