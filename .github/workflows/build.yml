@@ -26,14 +26,14 @@ jobs:
     - name: Download LineageOS GSI
       run: |
         echo "Downloading LineageOS GSI..."
-        gdown --id 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
+        gdown 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
         echo "GSI downloaded successfully"
         ls -lh lineage_gsi.7z
 
     - name: Download Samsung Stock ROM AP
       run: |
         echo "Downloading Samsung AP..."
-        gdown --id 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
+        gdown 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
         echo "AP downloaded successfully"
         ls -lh AP.tar.md5
 
