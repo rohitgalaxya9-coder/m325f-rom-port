@@ -11,12 +11,14 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils
+        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils unzip
         pip3 install gdown
         
-        wget https://github.com/unixporn/ro.adb/releases/download/v1.0/lpunpack
-        chmod +x lpunpack
-        sudo mv lpunpack /usr/local/bin/
+        # Clone lpunpack from a reliable working mirror
+        git clone https://github.com/whyshhnuv/lpunpack-lpmake-mirror.git lpbinary
+        sudo cp lpbinary/binary/lpunpack /usr/local/bin/
+        sudo chmod +x /usr/local/bin/lpunpack
+        rm -rf lpbinary
 
     - name: Download Samsung AP
       run: |
@@ -44,7 +46,7 @@ jobs:
             cp super.img super_raw.img
           fi
           
-          mkdir super_extracted
+          mkdir -p super_extracted
           lpunpack super_raw.img super_extracted/
         fi
 
