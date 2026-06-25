@@ -1,1 +1,88 @@
+name: Map Samsung Stock ROM Files
 
+on:
+  workflow_dispatch:
+
+jobs:
+  map_samsung:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils
+        pip3 install gdown
+        
+        wget https://github.com/unixporn/ro.adb/releases/download/v1.0/lpunpack
+        chmod +x lpunpack
+        sudo mv lpunpack /usr/local/bin/
+
+    - name: Download Samsung AP
+      run: |
+        echo "Downloading Samsung AP..."
+        gdown --id 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
+
+    - name: Extract AP and Super Image
+      run: |
+        cp AP.tar.md5 AP.tar
+        tar -xf AP.tar super.img.lz4 || echo "super.img.lz4 not found, extracting all..."
+        [ ! -f super.img.lz4 ] && tar -xf AP.tar
+        
+        if [ -f super.img.lz4 ]; then
+          unlz4 super.img.lz4 super.img
+        else
+          echo "WARNING: Could not find super.img.lz4"
+        fi
+
+    - name: Unpack Dynamic Partitions
+      run: |
+        if [ -f super.img ]; then
+          if file super.img | grep -q "sparse"; then
+            simg2img super.img super_raw.img
+          else
+            cp super.img super_raw.img
+          fi
+          
+          mkdir super_extracted
+          lpunpack super_raw.img super_extracted/
+        fi
+
+    - name: Mount Partitions and Map
+      run: |
+        # Map Vendor
+        if [ -f super_extracted/vendor.img ]; then
+          sudo mkdir -p /mnt/samsung_vendor
+          sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
+          find /mnt/samsung_vendor > samsung_vendor_paths.txt
+        fi
+
+        # Map ODM
+        if [ -f super_extracted/odm.img ]; then
+          sudo mkdir -p /mnt/samsung_odm
+          sudo mount -o loop,ro super_extracted/odm.img /mnt/samsung_odm || true
+          find /mnt/samsung_odm > samsung_odm_paths.txt
+        fi
+
+        # Map System
+        if [ -f super_extracted/system.img ]; then
+          sudo mkdir -p /mnt/samsung_system
+          sudo mount -o loop,ro super_extracted/system.img /mnt/samsung_system || true
+          find /mnt/samsung_system > samsung_system_paths.txt
+        fi
+
+    - name: Filter relevant hardware files
+      run: |
+        # Ensure files exist even if mounting failed
+        touch samsung_vendor_paths.txt samsung_odm_paths.txt samsung_system_paths.txt
+        
+        echo "Filtering for fingerprint, audio, RIL, and overlays..."
+        cat samsung_*_paths.txt | grep -iE 'fingerprint|biometric|egis|goodix|audio|mixer_paths|libsec|ril|overlay' > relevant_hardware_paths.txt
+
+    - name: Upload Maps
+      uses: actions/upload-artifact@v4
+      with:
+        name: Samsung-Hardware-Paths
+        path: relevant_hardware_paths.txt
+        retention-days: 7
+        
