@@ -23,7 +23,6 @@ jobs:
     - name: Download Samsung AP
       run: |
         echo "Downloading Samsung AP..."
-        # Removed the deprecated --id flag
         gdown 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
 
     - name: Extract AP and Super Image
@@ -53,25 +52,25 @@ jobs:
 
     - name: Mount Partitions and Map
       run: |
-        # Map Vendor
+        # Map Vendor (Added sudo to find and fallback to prevent crashes)
         if [ -f super_extracted/vendor.img ]; then
           sudo mkdir -p /mnt/samsung_vendor
           sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
-          find /mnt/samsung_vendor > samsung_vendor_paths.txt
+          sudo find /mnt/samsung_vendor > samsung_vendor_paths.txt || true
         fi
 
         # Map ODM
         if [ -f super_extracted/odm.img ]; then
           sudo mkdir -p /mnt/samsung_odm
           sudo mount -o loop,ro super_extracted/odm.img /mnt/samsung_odm || true
-          find /mnt/samsung_odm > samsung_odm_paths.txt
+          sudo find /mnt/samsung_odm > samsung_odm_paths.txt || true
         fi
 
         # Map System
         if [ -f super_extracted/system.img ]; then
           sudo mkdir -p /mnt/samsung_system
           sudo mount -o loop,ro super_extracted/system.img /mnt/samsung_system || true
-          find /mnt/samsung_system > samsung_system_paths.txt
+          sudo find /mnt/samsung_system > samsung_system_paths.txt || true
         fi
 
     - name: Filter relevant hardware files
