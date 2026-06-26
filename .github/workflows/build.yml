@@ -15,139 +15,70 @@ jobs:
         sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip
         pip3 install gdown
         
-        # Install lpunpack
+        # Reliable lpunpack installation
         git clone https://github.com/whyshhnuv/lpunpack-lpmake-mirror.git lpbinary
         sudo cp lpbinary/binary/lpunpack /usr/local/bin/
         sudo chmod +x /usr/local/bin/lpunpack
         rm -rf lpbinary
 
-    - name: Download Files
+    - name: Download and Prepare Files
       run: |
-        echo "Downloading LineageOS GSI..."
         gdown 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
-        
-        echo "Downloading Samsung AP..."
         gdown 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
-
-    - name: Extract LineageOS GSI
-      run: |
+        
+        # Extract GSI
         7z x lineage_gsi.7z -o./gsi_extracted/
         SYSTEM_IMG=$(find gsi_extracted/ -name "*.img" | head -1)
-        
-        if file "$SYSTEM_IMG" | grep -q "sparse"; then
-          simg2img "$SYSTEM_IMG" system_raw.img
-        else
-          cp "$SYSTEM_IMG" system_raw.img
-        fi
-        
-        # Add 300MB buffer for our injected overlays and configs
+        simg2img "$SYSTEM_IMG" system_raw.img
         e2fsck -f system_raw.img || true
-        resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 300 ))M || true
-
-    - name: Extract Samsung Super Image
-      run: |
-        cp AP.tar.md5 AP.tar
-        tar -xf AP.tar super.img.lz4 || true
-        [ ! -f super.img.lz4 ] && tar -xf AP.tar
+        resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 400 ))M || true
         
-        unlz4 super.img.lz4 super.img
-        
-        if file super.img | grep -q "sparse"; then
-          simg2img super.img super_raw.img
-        else
-          cp super.img super_raw.img
-        fi
-        
+        # Extract Samsung Super
+        cp AP.tar.md5 AP.tar && tar -xf AP.tar super.img.lz4 || tar -xf AP.tar
+        unlz4 super.img.lz4 super.img || true
+        simg2img super.img super_raw.img
         mkdir -p super_extracted
         lpunpack super_raw.img super_extracted/
 
-    - name: Mount Images
+    - name: Mount and Inject
       run: |
-        sudo mkdir -p /mnt/gsi_system
+        sudo mkdir -p /mnt/gsi_system /mnt/samsung_vendor
         sudo mount -o loop,rw system_raw.img /mnt/gsi_system
-        
-        sudo mkdir -p /mnt/samsung_vendor
         sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
-
-    - name: Surgically Inject Hardware Fixes
-      run: |
-        GSI=/mnt/gsi_system
-        VEN=/mnt/samsung_vendor
-
-        echo "--- Injecting Audio Policies ---"
-        if [ -f "$VEN/etc/audio_policy_configuration.xml" ]; then
-          sudo cp $VEN/etc/audio_policy_configuration.xml $GSI/system/etc/
-          sudo cp $VEN/etc/audio_effects.xml $GSI/system/etc/
-          sudo cp $VEN/etc/sec_audio_volume_curve.xml $GSI/system/etc/ 2>/dev/null || true
-          echo "Audio configurations injected."
-        fi
-
-        echo "--- Injecting Fingerprint & UI Overlays ---"
-        sudo mkdir -p $GSI/system/product/overlay
         
-        if [ -d "$VEN/overlay/FrameworkResOverlay" ]; then
-          sudo cp $VEN/overlay/FrameworkResOverlay/FrameworkResOverlay.apk $GSI/system/product/overlay/SamsungFrameworkResOverlay.apk
-        fi
-        if [ -d "$VEN/overlay/SystemUIResOverlay" ]; then
-          sudo cp $VEN/overlay/SystemUIResOverlay/SystemUIResOverlay.apk $GSI/system/product/overlay/SamsungSystemUIResOverlay.apk
-        fi
+        # 1. Inject Audio & Fingerprint Overlays
+        sudo mkdir -p /mnt/gsi_system/system/product/overlay
+        sudo cp /mnt/samsung_vendor/etc/audio_policy_configuration.xml /mnt/gsi_system/system/etc/ 2>/dev/null || true
+        sudo cp /mnt/samsung_vendor/overlay/FrameworkResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
         
-        sudo chmod 644 $GSI/system/product/overlay/Samsung*.apk 2>/dev/null || true
-        echo "Overlays injected."
-
-    - name: Apply Device Properties
-      run: |
-        BUILD_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
-        if [ -f "$BUILD_PROP" ]; then
-          sudo tee -a $BUILD_PROP << 'EOF'
+        # 2. Extract and Set Official Build Fingerprint
+        BUILD_PROP=$(grep "ro.build.fingerprint" /mnt/samsung_system/system/build.prop | head -1 | cut -d'=' -f2)
+        echo "Detected Fingerprint: $BUILD_PROP"
         
-        # Hardware Overrides
+        # 3. Patch GSI build.prop
+        GSI_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
+        sudo tee -a $GSI_PROP << EOF
+        
+        # Certified Samsung Build Fingerprint
+        ro.build.fingerprint=$BUILD_PROP
+        
+        # Fingerprint Fixes
         persist.sys.phh.samsung_fingerprint=true
         ro.hardware.fp.vendor=samsung
         ro.hardware.fp.sideCap=true
         ro.vendor.fingerprint.sensor_location=side
-        
-        # Audio
-        ro.multimedia.audio.supported=true
-        ro.vendor.audio.sdk.fluencetype=none
         EOF
-          echo "Properties appended."
-        fi
 
-    - name: Unmount and Repack
+    - name: Repack and Finalize
       run: |
-        sudo umount /mnt/gsi_system || true
-        sudo umount /mnt/samsung_vendor || true
-        
-        echo "Converting back to sparse image..."
-        e2fsck -f system_raw.img || true
+        sudo umount /mnt/gsi_system /mnt/samsung_vendor || true
         img2simg system_raw.img system_final.img
-
-    - name: Create Disabled Vbmeta
-      run: |
         dd if=/dev/zero bs=65536 count=1 of=vbmeta.img
-        python3 << 'PYEOF'
-        with open("vbmeta.img", "r+b") as f:
-            data = bytearray(f.read())
-            data[123] = 3
-            f.seek(0)
-            f.write(data)
-        PYEOF
-
-    - name: Package Fastboot Images
-      run: |
+        # Patch vbmeta (disable AVB)
+        python3 -c "f=open('vbmeta.img','r+b'); d=bytearray(f.read()); d[123]=3; f.seek(0); f.write(d)"
+        
         mkdir -p fastboot_package
         cp system_final.img fastboot_package/system.img
         cp vbmeta.img fastboot_package/vbmeta.img
-
-        cd fastboot_package
-        zip -r9 ../M325F-Lineage-Fastboot.zip .
-        cd ..
-
-    - name: Upload ROM
-      uses: actions/upload-artifact@v4
-      with:
-        name: M325F-Lineage-Fastboot
-        path: M325F-Lineage-Fastboot.zip
-        retention-days: 7
+        cd fastboot_package && zip -r9 ../M325F-Lineage-Fastboot.zip .
         
