@@ -23,8 +23,11 @@ jobs:
 
     - name: Download and Prepare Files
       run: |
-        gdown 1TxKbUfFXJvMQgmYt-6DZeHLua3KWE0WX -O lineage_gsi.7z
-        gdown 10ctAw1Tgns0k8CsqL9c4zMbqgGUtSqDo -O AP.tar.md5
+        echo "Downloading new LineageOS GSI..."
+        gdown 1KJt0TVw-7V8HoktboqkRbVyrpVgb0v1f -O lineage_gsi.7z
+        
+        echo "Downloading new Samsung AP..."
+        gdown 1OI1yzrejBNETuWG9nrLP06r8l8aQVIA6 -O AP.tar.md5
         
         # Extract GSI
         7z x lineage_gsi.7z -o./gsi_extracted/
