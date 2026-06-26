@@ -9,6 +9,18 @@ jobs:
     timeout-minutes: 120
 
     steps:
+    - name: Free up server disk space
+      run: |
+        echo "Nuking unnecessary GitHub bloatware to free up 30GB+ of space..."
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/local/.ghcup
+        sudo docker image prune --all --force
+        echo "Available space now:"
+        df -h
+
     - name: Install dependencies
       run: |
         sudo apt-get update -y
@@ -23,10 +35,10 @@ jobs:
 
     - name: Download and Prepare Files
       run: |
-        echo "Downloading new LineageOS GSI..."
+        echo "Downloading LineageOS GSI..."
         gdown 1KJt0TVw-7V8HoktboqkRbVyrpVgb0v1f -O lineage_gsi.7z
         
-        echo "Downloading new Samsung AP..."
+        echo "Downloading Samsung AP..."
         gdown 1OI1yzrejBNETuWG9nrLP06r8l8aQVIA6 -O AP.tar.md5
         
         # Extract GSI
@@ -70,7 +82,6 @@ jobs:
         # 3. Patch GSI build.prop securely
         GSI_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
         if [ -n "$GSI_PROP" ] && [ -f "$GSI_PROP" ]; then
-          # Write to a temporary file owned by the runner first
           cat << EOF > /tmp/extra_props.txt
         
         # Certified Samsung Build Fingerprint
@@ -87,7 +98,6 @@ jobs:
         ro.vendor.audio.sdk.fluencetype=none
         EOF
           
-          # Inject as root to bypass permission walls
           sudo sh -c "cat /tmp/extra_props.txt >> $GSI_PROP"
           echo "Properties injected successfully."
         else
@@ -115,4 +125,4 @@ jobs:
         name: M325F-Lineage-Fastboot
         path: M325F-Lineage-Fastboot.zip
         retention-days: 7
-        
+        concurrency: 
