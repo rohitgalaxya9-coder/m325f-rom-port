@@ -42,36 +42,42 @@ jobs:
 
     - name: Mount and Inject
       run: |
-        sudo mkdir -p /mnt/gsi_system /mnt/samsung_vendor
+        sudo mkdir -p /mnt/gsi_system /mnt/samsung_vendor /mnt/samsung_system
         sudo mount -o loop,rw system_raw.img /mnt/gsi_system
         sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
+        sudo mount -o loop,ro super_extracted/system.img /mnt/samsung_system || true
         
         # 1. Inject Audio & Fingerprint Overlays
         sudo mkdir -p /mnt/gsi_system/system/product/overlay
         sudo cp /mnt/samsung_vendor/etc/audio_policy_configuration.xml /mnt/gsi_system/system/etc/ 2>/dev/null || true
-        sudo cp /mnt/samsung_vendor/overlay/FrameworkResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
+        sudo cp -r /mnt/samsung_vendor/overlay/FrameworkResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
+        sudo cp -r /mnt/samsung_vendor/overlay/SystemUIResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
         
         # 2. Extract and Set Official Build Fingerprint
-        BUILD_PROP=$(grep "ro.build.fingerprint" /mnt/samsung_system/system/build.prop | head -1 | cut -d'=' -f2)
-        echo "Detected Fingerprint: $BUILD_PROP"
+        FINGERPRINT=$(grep "ro.build.fingerprint" /mnt/samsung_system/system/build.prop | head -1 | cut -d'=' -f2)
+        echo "Detected Fingerprint: $FINGERPRINT"
         
         # 3. Patch GSI build.prop
         GSI_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
         sudo tee -a $GSI_PROP << EOF
         
         # Certified Samsung Build Fingerprint
-        ro.build.fingerprint=$BUILD_PROP
+        ro.build.fingerprint=$FINGERPRINT
         
         # Fingerprint Fixes
         persist.sys.phh.samsung_fingerprint=true
         ro.hardware.fp.vendor=samsung
         ro.hardware.fp.sideCap=true
         ro.vendor.fingerprint.sensor_location=side
+        
+        # Audio
+        ro.multimedia.audio.supported=true
+        ro.vendor.audio.sdk.fluencetype=none
         EOF
 
     - name: Repack and Finalize
       run: |
-        sudo umount /mnt/gsi_system /mnt/samsung_vendor || true
+        sudo umount /mnt/gsi_system /mnt/samsung_vendor /mnt/samsung_system || true
         img2simg system_raw.img system_final.img
         dd if=/dev/zero bs=65536 count=1 of=vbmeta.img
         # Patch vbmeta (disable AVB)
