@@ -36,13 +36,14 @@ jobs:
         # Extract Samsung Super
         cp AP.tar.md5 AP.tar && tar -xf AP.tar super.img.lz4 || tar -xf AP.tar
         unlz4 super.img.lz4 super.img || true
-        simg2img super.img super_raw.img
+        simg2img super.img super_raw.img || cp super.img super_raw.img
         mkdir -p super_extracted
         lpunpack super_raw.img super_extracted/
 
     - name: Mount and Inject
       run: |
         sudo mkdir -p /mnt/gsi_system /mnt/samsung_vendor /mnt/samsung_system
+        
         sudo mount -o loop,rw system_raw.img /mnt/gsi_system
         sudo mount -o loop,ro super_extracted/vendor.img /mnt/samsung_vendor || true
         sudo mount -o loop,ro super_extracted/system.img /mnt/samsung_system || true
@@ -53,13 +54,21 @@ jobs:
         sudo cp -r /mnt/samsung_vendor/overlay/FrameworkResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
         sudo cp -r /mnt/samsung_vendor/overlay/SystemUIResOverlay/*.apk /mnt/gsi_system/system/product/overlay/ 2>/dev/null || true
         
-        # 2. Extract and Set Official Build Fingerprint
-        FINGERPRINT=$(grep "ro.build.fingerprint" /mnt/samsung_system/system/build.prop | head -1 | cut -d'=' -f2)
-        echo "Detected Fingerprint: $FINGERPRINT"
+        # 2. Dynamically locate Samsung build.prop and extract Fingerprint
+        SAMSUNG_PROP=$(find /mnt/samsung_system -name "build.prop" | head -1)
+        if [ -n "$SAMSUNG_PROP" ] && [ -f "$SAMSUNG_PROP" ]; then
+          FINGERPRINT=$(grep -i "ro.build.fingerprint" "$SAMSUNG_PROP" | head -1 | cut -d'=' -f2)
+          echo "Detected Fingerprint: $FINGERPRINT"
+        else
+          echo "WARNING: Samsung build.prop not found! Using certified fallback."
+          FINGERPRINT="samsung/m325fxx/m325f:13/TP1A.220624.014/M325FXXS7DWD2:user/release-keys"
+        fi
         
-        # 3. Patch GSI build.prop
+        # 3. Patch GSI build.prop securely
         GSI_PROP=$(find /mnt/gsi_system -name "build.prop" | head -1)
-        sudo tee -a $GSI_PROP << EOF
+        if [ -n "$GSI_PROP" ] && [ -f "$GSI_PROP" ]; then
+          # Write to a temporary file owned by the runner first
+          cat << EOF > /tmp/extra_props.txt
         
         # Certified Samsung Build Fingerprint
         ro.build.fingerprint=$FINGERPRINT
@@ -74,17 +83,33 @@ jobs:
         ro.multimedia.audio.supported=true
         ro.vendor.audio.sdk.fluencetype=none
         EOF
+          
+          # Inject as root to bypass permission walls
+          sudo sh -c "cat /tmp/extra_props.txt >> $GSI_PROP"
+          echo "Properties injected successfully."
+        else
+          echo "ERROR: GSI build.prop not found!"
+        fi
 
     - name: Repack and Finalize
       run: |
         sudo umount /mnt/gsi_system /mnt/samsung_vendor /mnt/samsung_system || true
         img2simg system_raw.img system_final.img
+        
+        # Generate clean patched vbmeta
         dd if=/dev/zero bs=65536 count=1 of=vbmeta.img
-        # Patch vbmeta (disable AVB)
         python3 -c "f=open('vbmeta.img','r+b'); d=bytearray(f.read()); d[123]=3; f.seek(0); f.write(d)"
         
+        # Package for Fastboot
         mkdir -p fastboot_package
         cp system_final.img fastboot_package/system.img
         cp vbmeta.img fastboot_package/vbmeta.img
         cd fastboot_package && zip -r9 ../M325F-Lineage-Fastboot.zip .
+
+    - name: Upload ROM
+      uses: actions/upload-artifact@v4
+      with:
+        name: M325F-Lineage-Fastboot
+        path: M325F-Lineage-Fastboot.zip
+        retention-days: 7
         
