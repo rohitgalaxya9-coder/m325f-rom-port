@@ -24,7 +24,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip wget
+        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip wget file
         
         # Reliable lpunpack installation
         git clone https://github.com/whyshhnuv/lpunpack-lpmake-mirror.git lpbinary
@@ -43,14 +43,30 @@ jobs:
         # Extract GSI
         7z x lineage_gsi.7z -o./gsi_extracted/
         SYSTEM_IMG=$(find gsi_extracted/ -name "*.img" | head -1)
-        simg2img "$SYSTEM_IMG" system_raw.img
+        
+        # SMART CHECK: Only convert if it is actually a sparse image
+        if file "$SYSTEM_IMG" | grep -q "sparse"; then
+          echo "Sparse image detected. Converting..."
+          simg2img "$SYSTEM_IMG" system_raw.img
+        else
+          echo "Raw image detected. Skipping conversion..."
+          cp "$SYSTEM_IMG" system_raw.img
+        fi
+        
         e2fsck -f system_raw.img || true
         resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 400 ))M || true
         
         # Extract Samsung Super 
         cp AP.tar.md5 AP.tar && tar -xf AP.tar super.img.lz4 || tar -xf AP.tar
         unlz4 super.img.lz4 super.img || true
-        simg2img super.img super_raw.img || cp super.img super_raw.img
+        
+        # SMART CHECK for Samsung image as well
+        if file super.img | grep -q "sparse"; then
+          simg2img super.img super_raw.img
+        else
+          cp super.img super_raw.img
+        fi
+        
         mkdir -p super_extracted
         lpunpack super_raw.img super_extracted/
 
@@ -106,6 +122,8 @@ jobs:
     - name: Repack and Finalize
       run: |
         sudo umount /mnt/gsi_system /mnt/samsung_vendor /mnt/samsung_system || true
+        
+        echo "Converting patched raw image back to flashable sparse image..."
         img2simg system_raw.img system_final.img
         
         # Generate clean patched vbmeta
