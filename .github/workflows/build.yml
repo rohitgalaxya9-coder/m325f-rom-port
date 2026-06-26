@@ -24,8 +24,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip
-        pip3 install gdown
+        sudo apt-get install -y python3-pip lz4 android-sdk-libsparse-utils e2fsprogs 7zip p7zip-full unzip wget
         
         # Reliable lpunpack installation
         git clone https://github.com/whyshhnuv/lpunpack-lpmake-mirror.git lpbinary
@@ -36,10 +35,10 @@ jobs:
     - name: Download and Prepare Files
       run: |
         echo "Downloading LineageOS GSI..."
-        gdown 1KJt0TVw-7V8HoktboqkRbVyrpVgb0v1f -O lineage_gsi.7z
+        wget -O lineage_gsi.7z "https://download1078.mediafire.com/gtsyvs5h731ge-aXLQbKgt5zJDS02BiV-WnW-OqYCOOcFlTm7K-gqiehg6Y8tCOin_9uHtubsfb1uVCs1lLgu_hX4bt31H4rjHxoJoFf8ll92xgGonnhZPkP8P8mpoQQ33Tnw7ICM6Ty0N4kdSRQsuLU2zVxITVFyKTKEEPuNMBo_Q/vzvm8n3yzpd1dip/LineageOS-23.2-20260524-GAPPS-EXT4-GSI.7z"
         
         echo "Downloading Samsung AP..."
-        gdown 1OI1yzrejBNETuWG9nrLP06r8l8aQVIA6 -O AP.tar.md5
+        wget -O AP.tar.md5 "https://download1532.mediafire.com/0va68yu2lf0grxDoyUEnnY9uyEilDqLOT4dNPyDXCen9lrKDNic0JtKthFwQxGv3bm-eKAuJ4PNFWckrErv7M2ixKYvXiz2knWoNk7SqvSkLUTJYOcLGgO9Zyjn9pzBUmTFkVf44Iqn_gTWNeQQxHmp5UqtVHzK_JtMcfUjxPuNqxg/lzba5lshzidws0s/AP_M325FXXSDDYE3_M325FXXSDDYE3_MQB95479546_REV00_user_low_ship_MULTI_CERT_meta_OS13.tar.md5"
         
         # Extract GSI
         7z x lineage_gsi.7z -o./gsi_extracted/
@@ -48,7 +47,7 @@ jobs:
         e2fsck -f system_raw.img || true
         resize2fs system_raw.img $(( $(du -m system_raw.img | cut -f1) + 400 ))M || true
         
-        # Extract Samsung Super
+        # Extract Samsung Super 
         cp AP.tar.md5 AP.tar && tar -xf AP.tar super.img.lz4 || tar -xf AP.tar
         unlz4 super.img.lz4 super.img || true
         simg2img super.img super_raw.img || cp super.img super_raw.img
@@ -125,4 +124,4 @@ jobs:
         name: M325F-Lineage-Fastboot
         path: M325F-Lineage-Fastboot.zip
         retention-days: 7
-        concurrency: 
+        
